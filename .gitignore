@@ -1,0 +1,10 @@
+!.gitignore
+*.o
+*.a
+*.exe
+*.mp4
+*.out
+/faac
+/libfaac
+/x264
+/libx264
