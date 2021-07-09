@@ -61,7 +61,7 @@ static void* record_thread_proc(void *argv)
             }
         }
 
-        while ((recorder->flags & (FLAG_EXIT|FLAG_START)) == 0) usleep(100*1000); // if record stopped
+        while ((recorder->flags & (FLAG_EXIT|FLAG_START)) == 0) { recorder->starttick = 0; usleep(100*1000); } // if record stopped
         if (recorder->flags & FLAG_EXIT) break; // if recorder exited
 
         if ((recorder->flags & FLAG_START) && readsize > 0) { // if recorder started, and got video data
@@ -80,8 +80,10 @@ static void* record_thread_proc(void *argv)
                     muxer = mp4muxer_init(filepath, recorder->duration, recorder->width, recorder->height, recorder->fps, recorder->fps * 2, recorder->channels, recorder->samprate, 16, 1024, recorder->aenc->aacinfo, ish265);
                     break;
                 }
-                recorder->starttick = get_tick_count();
-                recorder->starttick = recorder->starttick ? recorder->starttick : 1;
+                if (recorder->starttick == 0) {
+                    recorder->starttick = get_tick_count();
+                    recorder->starttick = recorder->starttick ? recorder->starttick : 1;
+                }
             }
 
             if (muxer) { // if muxer created
@@ -100,9 +102,9 @@ static void* record_thread_proc(void *argv)
             }
         }
 
-        if (recorder->starttick && (int32_t)get_tick_count() - (int32_t)recorder->starttick > recorder->duration) {
+        if (recorder->starttick && (int32_t)get_tick_count() - (int32_t)recorder->starttick >= recorder->duration) {
             recorder->starttick += recorder->duration;
-            recorder->flags    |= FLAG_NEXT;
+            recorder->flags     |= FLAG_NEXT;
             codec_reset(recorder->venc, CODEC_REQUEST_IDR);
         }
     }

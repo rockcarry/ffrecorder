@@ -17,10 +17,8 @@ typedef struct {
 
     x264_param_t param;
     x264_t  *x264;
-    int      iw;
-    int      ih;
-    int      ow;
-    int      oh;
+    int      vw;
+    int      vh;
 
     uint8_t *ibuff[YUV_BUF_NUM];
     int      ihead;
@@ -56,9 +54,9 @@ static void* venc_encode_thread_proc(void *param)
     x264_picture_init(&pic_out);
     pic_in.img.i_csp   = X264_CSP_I420;
     pic_in.img.i_plane = 3;
-    pic_in.img.i_stride[0] = enc->ow;
-    pic_in.img.i_stride[1] = enc->ow / 2;
-    pic_in.img.i_stride[2] = enc->ow / 2;
+    pic_in.img.i_stride[0] = enc->vw;
+    pic_in.img.i_stride[1] = enc->vw / 2;
+    pic_in.img.i_stride[2] = enc->vw / 2;
 
     while (!(enc->status & TS_EXIT)) {
         if (!(enc->status & TS_START)) {
@@ -69,8 +67,8 @@ static void* venc_encode_thread_proc(void *param)
         while (enc->isize <= 0 && !(enc->status & TS_EXIT)) pthread_cond_wait(&enc->icond, &enc->imutex);
         if (enc->isize > 0) {
             pic_in.img.plane[0] = enc->ibuff[enc->ihead];
-            pic_in.img.plane[1] = enc->ibuff[enc->ihead] + enc->ow * enc->oh * 4 / 4;
-            pic_in.img.plane[2] = enc->ibuff[enc->ihead] + enc->ow * enc->oh * 5 / 4;
+            pic_in.img.plane[1] = enc->ibuff[enc->ihead] + enc->vw * enc->vh * 4 / 4;
+            pic_in.img.plane[2] = enc->ibuff[enc->ihead] + enc->vw * enc->vh * 5 / 4;
             pic_in.i_type       = 0;
             if (enc->status & TS_REQUEST_IDR) {
                 enc->status  &= ~TS_REQUEST_IDR;
@@ -138,7 +136,7 @@ static void h264enc_write(void *ctxt, void *buf, int len)
     if (!ctxt) return;
     pthread_mutex_lock(&enc->imutex);
     if (enc->isize < YUV_BUF_NUM) {
-        memcpy(enc->ibuff[enc->itail], buf, MIN(sizeof(enc->ibuff[enc->itail]), len));
+        memcpy(enc->ibuff[enc->itail], buf, MIN(enc->vw * enc->vh * 3 / 2, len));
         if (++enc->itail == YUV_BUF_NUM) enc->itail = 0;
         enc->isize++;
     }
@@ -302,8 +300,8 @@ CODEC* h264enc_init(int frate, int w, int h, int bitrate)
     enc->param.rc.i_vbv_buffer_size = 2 * bitrate / 1000;
 #endif
 
-    enc->ow   = w;
-    enc->oh   = h;
+    enc->vw   = w;
+    enc->vh   = h;
     enc->x264 = x264_encoder_open(&enc->param);
     for (i=0; i<YUV_BUF_NUM; i++) {
         enc->ibuff[i] = (uint8_t*)enc + sizeof(H264ENC) + i * (w * h * 3 / 2);
