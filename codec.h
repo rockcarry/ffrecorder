@@ -35,6 +35,7 @@ typedef struct {
 CODEC* alawenc_init(void);
 CODEC* aacenc_init (int channels, int samplerate, int bitrate);
 CODEC* h264enc_init(int frate, int w, int h, int bitrate);
+CODEC* bufenc_init (char *name, int bufsize);
 
 #define codec_uninit(codec)                             (codec)->uninit(codec)
 #define codec_write(codec, buf, len)                    (codec)->write(codec, buf, len)

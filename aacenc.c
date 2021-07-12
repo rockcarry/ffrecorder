@@ -10,7 +10,7 @@
 #include "faac.h"
 #include "utils.h"
 
-#define IN_BUF_SIZE  (1024 * 4 * 4)
+#define IN_BUF_SIZE  (1024 * 4 * 3)
 #define OUT_BUF_SIZE (1024 * 8 * 1)
 typedef struct {
     CODEC_INTERFACE_FUNCS
@@ -59,7 +59,10 @@ static void* aenc_encode_thread_proc(void *param)
             len = faacEncEncode(enc->faacenc, (int32_t*)(enc->ibuff + enc->ihead), enc->insamples, outbuf, sizeof(outbuf));
             enc->ihead += enc->insamples * sizeof(int16_t);
             enc->isize -= enc->insamples * sizeof(int16_t);
-            if (enc->ihead == sizeof(enc->ibuff)) enc->ihead = 0;
+            if (enc->isize < (int)(enc->insamples * sizeof(int16_t))) {
+                memmove(enc->ibuff, enc->ibuff + enc->ihead, enc->isize);
+                enc->ihead = 0; enc->itail = enc->isize;
+            }
         }
         pthread_mutex_unlock(&enc->imutex);
 
@@ -105,10 +108,12 @@ static void aacenc_write(void *ctxt, void *buf, int len)
     AACENC *enc = (AACENC*)ctxt;
     if (!ctxt) return;
     pthread_mutex_lock(&enc->imutex);
-    nwrite = MIN(len, (int)sizeof(enc->ibuff) - enc->isize);
-    enc->itail = ringbuf_write(enc->ibuff, sizeof(enc->ibuff), enc->itail, buf, nwrite);
-    enc->isize+= nwrite;
-    pthread_cond_signal(&enc->icond);
+    nwrite = MIN(len, (int)sizeof(enc->ibuff) - enc->itail);
+    if (nwrite > 0) {
+        enc->itail = ringbuf_write(enc->ibuff, sizeof(enc->ibuff), enc->itail, buf, nwrite);
+        enc->isize+= nwrite;
+        pthread_cond_signal(&enc->icond);
+    }
     pthread_mutex_unlock(&enc->imutex);
 }
 
