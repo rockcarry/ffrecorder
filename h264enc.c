@@ -230,12 +230,12 @@ CODEC* h264enc_init(int frate, int w, int h, int bitrate)
     if (!enc) return NULL;
 
     strncpy(enc->name, "h264enc", sizeof(enc->name));
-    enc->uninit     = h264enc_uninit;
-    enc->write      = h264enc_write;
-    enc->read       = h264enc_read;
-    enc->start      = h264enc_start;
-    enc->reset      = h264enc_reset;
-    enc->reconfig   = h264enc_reconfig;
+    enc->uninit   = h264enc_uninit;
+    enc->write    = h264enc_write;
+    enc->read     = h264enc_read;
+    enc->start    = h264enc_start;
+    enc->reset    = h264enc_reset;
+    enc->reconfig = h264enc_reconfig;
 
     // init mutex & cond
     pthread_mutex_init(&enc->imutex, NULL);
@@ -276,8 +276,8 @@ CODEC* h264enc_init(int frate, int w, int h, int bitrate)
     enc->param.rc.i_vbv_buffer_size = 2 * bitrate / 1000;
 #endif
 
-    enc->vw   = w;
-    enc->vh   = h;
+    enc->vw = w;
+    enc->vh = h;
     enc->x264 = x264_encoder_open(&enc->param);
     for (i=0; i<YUV_BUF_NUM; i++) {
         enc->ibuff[i] = (uint8_t*)enc + sizeof(H264ENC) + i * (w * h * 3 / 2);

@@ -186,11 +186,11 @@ CODEC* aacenc_init(int channels, int samplerate, int bitrate)
     if (!enc) return NULL;
 
     strncpy(enc->name, "aacenc", sizeof(enc->name));
-    enc->uninit     = aacenc_uninit;
-    enc->write      = aacenc_write;
-    enc->read       = aacenc_read;
-    enc->start      = aacenc_start;
-    enc->reset      = aacenc_reset;
+    enc->uninit = aacenc_uninit;
+    enc->write  = aacenc_write;
+    enc->read   = aacenc_read;
+    enc->start  = aacenc_start;
+    enc->reset  = aacenc_reset;
 
     // init mutex & cond
     pthread_mutex_init(&enc->imutex, NULL);

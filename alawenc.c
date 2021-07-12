@@ -134,11 +134,11 @@ CODEC* alawenc_init(void)
     if (!enc) return NULL;
 
     strncpy(enc->name, "alawenc", sizeof(enc->name));
-    enc->uninit     = alawenc_uninit;
-    enc->write      = alawenc_write;
-    enc->read       = alawenc_read;
-    enc->start      = alawenc_start;
-    enc->reset      = alawenc_reset;
+    enc->uninit = alawenc_uninit;
+    enc->write  = alawenc_write;
+    enc->read   = alawenc_read;
+    enc->start  = alawenc_start;
+    enc->reset  = alawenc_reset;
 
     // init mutex & cond
     pthread_mutex_init(&enc->omutex, NULL);
