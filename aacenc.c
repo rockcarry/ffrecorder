@@ -174,28 +174,6 @@ static void aacenc_reset(void *ctxt, int type)
     }
 }
 
-static void aacenc_obuflock(void *ctxt, uint8_t **pbuf, int *max, int *head, int *tail, int *size)
-{
-    AACENC *enc = (AACENC*)ctxt;
-    if (!ctxt) return;
-    pthread_mutex_lock(&enc->omutex);
-    *pbuf = enc->obuff;
-    *max  = sizeof(enc->obuff);
-    *head = enc->ohead;
-    *tail = enc->otail;
-    *size = enc->osize;
-}
-
-static void aacenc_obufunlock(void *ctxt, int head, int tail, int size)
-{
-    AACENC *enc = (AACENC*)ctxt;
-    if (!ctxt) return;
-    enc->ohead = head;
-    enc->otail = tail;
-    enc->osize = size;
-    pthread_mutex_unlock(&enc->omutex);
-}
-
 CODEC* aacenc_init(int channels, int samplerate, int bitrate)
 {
     faacEncConfigurationPtr conf;
@@ -208,8 +186,6 @@ CODEC* aacenc_init(int channels, int samplerate, int bitrate)
     enc->read       = aacenc_read;
     enc->start      = aacenc_start;
     enc->reset      = aacenc_reset;
-    enc->obuflock   = aacenc_obuflock;
-    enc->obufunlock = aacenc_obufunlock;
 
     // init mutex & cond
     pthread_mutex_init(&enc->imutex, NULL);
