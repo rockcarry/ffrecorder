@@ -20,12 +20,18 @@
 #define htonl(a) (a)
 #endif
 
-static int h26x_parse_nalu_header(uint8_t *data, int len, int *hsize)
+static uint8_t getbyte(uint8_t *buf1, int len1, uint8_t *buf2, int len2, int i)
 {
-    int counter, i;
-    for (counter=0,i=0; i<len; i++) {
-        if (data[i] == 0) counter++;
-        else if (counter >= 2 && data[i] == 0x01) {
+    return (i < len1) ? buf1[i] : buf2[i - len1];
+}
+
+static int h26x_parse_nalu_header(uint8_t *data1, int len1, uint8_t *data2, int len2, int idx, int *hsize)
+{
+    int len = len1 + len2, counter, i;
+    for (counter=0,i=idx; i<len; i++) {
+        uint8_t byte = getbyte(data1, len1, data2, len2, i);
+        if (byte == 0) counter++;
+        else if (counter >= 2 && byte == 0x01) {
             *hsize = counter;
             return i;
         } else {
@@ -35,67 +41,60 @@ static int h26x_parse_nalu_header(uint8_t *data, int len, int *hsize)
     return -1;
 }
 
-static void h264_parse_sps_pps(uint8_t *data, int len, uint8_t **spsbuf, int *spslen, uint8_t **ppsbuf, int *ppslen)
+static int h264_parse_sps_pps(uint8_t *data1, int len1, uint8_t *data2, int len2, uint8_t *spsbuf, int *spslen, uint8_t *ppsbuf, int *ppslen)
 {
-    uint8_t *sbuf = NULL, *pbuf = NULL;
-    int      hsize, slen = 0,  plen = 0, i;
+    int len = len1 + len2, hsize, sidx = 0, slen = 0, pidx = 0, plen = 0, i;
 
-    i = h26x_parse_nalu_header(data, len, &hsize);
-    if (i < 2 || i + 1 >= len || (data[i + 1] & 0x1f) != 7) goto done;
-    sbuf = data + i - hsize; // got sps
-    data+= i;
+    i = h26x_parse_nalu_header(data1, len1, data2, len2, 0, &hsize);
+    if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) & 0x1f) != 7) return -1;
+    sidx = i - hsize; // got sps
     len -= i;
-    i = h26x_parse_nalu_header(data, len, &hsize);
-    slen = (int)(data + i - sbuf - hsize);
+    i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
+    slen = i - sidx - hsize;
 
-    if (i < 2 || i + 1 >= len || (data[i + 1] & 0x1f) != 8) goto done;
-    pbuf = data + i - hsize; // got pps
-    data+= i;
+    if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) & 0x1f) != 8) return -1;
+    pidx = i - hsize;
     len -= i;
-    i = h26x_parse_nalu_header(data, len, &hsize);
-    plen = (int)(data + i - pbuf - hsize);
+    i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
+    plen = i - pidx - hsize;
 
-done:
-    if (spsbuf) *spsbuf = sbuf;
-    if (ppsbuf) *ppsbuf = pbuf;
-    if (spslen) *spslen = slen;
-    if (ppslen) *ppslen = plen;
+    for (i = 0; i < slen && i < *spslen; i++) spsbuf[i] = getbyte(data1, len1, data2, len2, sidx + i);
+    *spslen = i;
+    for (i = 0; i < plen && i < *ppslen; i++) ppsbuf[i] = getbyte(data1, len1, data2, len2, pidx + i);
+    *ppslen = i;
+    return 0;
 }
 
-static void h265_parse_vps_sps_pps(uint8_t *data, int len, uint8_t **vpsbuf, int *vpslen, uint8_t **spsbuf, int *spslen, uint8_t **ppsbuf, int *ppslen)
+static int h265_parse_vps_sps_pps(uint8_t *data1, int len1, uint8_t *data2, int len2, uint8_t *vpsbuf, int *vpslen, uint8_t *spsbuf, int *spslen, uint8_t *ppsbuf, int *ppslen)
 {
-    uint8_t *vbuf = NULL, *sbuf = NULL, *pbuf = NULL;
-    int      hsize, vlen = 0, slen = 0,  plen = 0, i;
+    int len = len1 + len2, hsize, vidx = 0, vlen = 0, sidx = 0, slen = 0, pidx = 0, plen = 0, i;
 
-    i = h26x_parse_nalu_header(data, len, &hsize);
-    if (i < 2 || i + 1 >= len || (data[i + 1] >> 1) != 32) goto done;
-    vbuf = data + i - hsize; // got vps
-    data+= i;
+    i = h26x_parse_nalu_header(data1, len1, data2, len2, 0, &hsize);
+    if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) >> 1) != 32) return -1;
+    vidx = i - hsize; // got vps
     len -= i;
-    i = h26x_parse_nalu_header(data, len, &hsize);
-    vlen = (int)(data + i - vbuf - hsize);
+    i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
+    vlen = i - vidx - hsize;
 
-    if (i < 2 || i + 1 >= len || (data[i + 1] >> 1) != 33) goto done;
-    sbuf = data + i - hsize; // got sps
-    data+= i;
+    if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) >> 1) != 33) return -1;
+    sidx = i - hsize; // got sps
     len -= i;
-    i = h26x_parse_nalu_header(data, len, &hsize);
-    slen = (int)(data + i - sbuf - hsize);
+    i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
+    slen = i - sidx - hsize;
 
-    if (i < 2 || i + 1 >= len || (data[i + 1] >> 1) != 34) goto done;
-    pbuf = data + i - hsize; // got pps
-    data+= i;
+    if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) >> 1) != 34) return -1;
+    pidx = i - hsize; // got pps
     len -= i;
-    i = h26x_parse_nalu_header(data, len, &hsize);
-    plen = (int)(data + i - pbuf - hsize);
+    i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
+    plen = i - pidx - hsize;
 
-done:
-    if (vpsbuf) *vpsbuf = vbuf;
-    if (spsbuf) *spsbuf = sbuf;
-    if (ppsbuf) *ppsbuf = pbuf;
-    if (vpslen) *vpslen = vlen;
-    if (spslen) *spslen = slen;
-    if (ppslen) *ppslen = plen;
+    for (i = 0; i < vlen && i < *vpslen; i++) vpsbuf[i] = getbyte(data1, len1, data2, len2, vidx + i);
+    *vpslen = i;
+    for (i = 0; i < slen && i < *spslen; i++) spsbuf[i] = getbyte(data1, len1, data2, len2, sidx + i);
+    *spslen = i;
+    for (i = 0; i < plen && i < *ppslen; i++) ppsbuf[i] = getbyte(data1, len1, data2, len2, pidx + i);
+    *ppslen = i;
+    return 0;
 }
 
 #ifndef offsetof
@@ -1008,21 +1007,23 @@ void mp4muxer_exit(void *ctx)
     }
 }
 
-void mp4muxer_video(void *ctx, unsigned char *buf, int len, int key, unsigned pts)
+void mp4muxer_video(void *ctx, unsigned char *buf1, int len1, unsigned char *buf2, int len2, int key, unsigned pts)
 {
     MP4FILE *mp4 = (MP4FILE*)ctx;
-    uint8_t  *vpsbuf = NULL, *spsbuf = NULL, *ppsbuf = NULL;
-    int       vpslen = 0,     spslen = 0,     ppslen = 0;
+    int      len = len1 + len2;
+    uint8_t  vpsbuf[256]; int vpslen = sizeof(vpsbuf);
+    uint8_t  spsbuf[256]; int spslen = sizeof(spsbuf);
+    uint8_t  ppsbuf[256]; int ppslen = sizeof(ppsbuf);
     if (!ctx) return;
 
     if (mp4->flags & FLAG_VIDEO_H265_ENCODE) {
-        h265_parse_vps_sps_pps(buf, len, &vpsbuf, &vpslen, &spsbuf, &spslen, &ppsbuf, &ppslen);
+        h265_parse_vps_sps_pps(buf1, len1, buf2, len2, vpsbuf, &vpslen, spsbuf, &spslen, ppsbuf, &ppslen);
         if (vpslen && !(mp4->flags & FLAG_AVC1_HEV1_WRITTEN)) {
             mp4muxer_write_hev1_box(mp4, vpsbuf, vpslen, spsbuf, spslen, ppsbuf, ppslen);
             mp4->flags |= FLAG_AVC1_HEV1_WRITTEN;
         }
     } else {
-        h264_parse_sps_pps(buf, len, &spsbuf, &spslen, &ppsbuf, &ppslen);
+        h264_parse_sps_pps(buf1, len1, buf2, len2, spsbuf, &spslen, ppsbuf, &ppslen);
         if (spslen && !(mp4->flags & FLAG_AVC1_HEV1_WRITTEN)) {
             mp4muxer_write_avc1_box(mp4, spsbuf, spslen, ppsbuf, ppslen);
             mp4->flags |= FLAG_AVC1_HEV1_WRITTEN;
@@ -1061,7 +1062,8 @@ void mp4muxer_video(void *ctx, unsigned char *buf, int len, int key, unsigned pt
 
     mp4->mdat_size = htonl(ntohl(mp4->mdat_size) + len);
     mp4->chunk_off+= len;
-    fwrite(buf, 1, len, mp4->fp);
+    if (len1) fwrite(buf1, len1, 1, mp4->fp);
+    if (len2) fwrite(buf2, len2, 1, mp4->fp);
 
 #if 1
     if (ntohl(mp4->stszv_count) % (mp4->frate * 5) == 0) {
@@ -1071,9 +1073,10 @@ void mp4muxer_video(void *ctx, unsigned char *buf, int len, int key, unsigned pt
 #endif
 }
 
-void mp4muxer_audio(void *ctx, unsigned char *buf, int len, int key, unsigned pts)
+void mp4muxer_audio(void *ctx, unsigned char *buf1, int len1, unsigned char *buf2, int len2, int key, unsigned pts)
 {
     MP4FILE *mp4 = (MP4FILE*)ctx;
+    int      len = len1 + len2;
     if (!ctx) return;
 
     if (mp4->stsza_buf && (int)ntohl(mp4->stsza_count) < mp4->aframemax) {
@@ -1103,7 +1106,8 @@ void mp4muxer_audio(void *ctx, unsigned char *buf, int len, int key, unsigned pt
 
     mp4->mdat_size = htonl(ntohl(mp4->mdat_size) + len);
     mp4->chunk_off+= len;
-    fwrite(buf, 1, len, mp4->fp);
+    if (len1) fwrite(buf1, len1, 1, mp4->fp);
+    if (len2) fwrite(buf2, len2, 1, mp4->fp);
 }
 
 

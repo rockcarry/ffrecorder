@@ -267,14 +267,16 @@ void avimuxer_exit(void *ctx)
     }
 }
 
-void avimuxer_audio(void *ctx, unsigned char *buf, int len, int key, unsigned pts)
+void avimuxer_audio(void *ctx, unsigned char *buf1, int len1, unsigned char *buf2, int len2, int key, unsigned pts)
 {
     AVI_FILE *avi = (AVI_FILE*)ctx;
     if (avi && avi->fp) {
+        int len      =  len1 + len2;
         int alignlen = (len & 1) ? len + 1 : len;
-        fwrite("00wb"   , 4  , 1, avi->fp);
-        fwrite(&alignlen, 4  , 1, avi->fp);
-        fwrite( buf     , len, 1, avi->fp);
+        fwrite("00wb"   , 4, 1, avi->fp);
+        fwrite(&alignlen, 4, 1, avi->fp);
+        if (len1) fwrite(buf1, len1, 1, avi->fp);
+        if (len2) fwrite(buf2, len2, 1, avi->fp);
         if (len & 1) fputc(0, avi->fp);
         if (avi->framesize_lst && avi->framesize_idx < avi->framesize_max) {
             avi->framesize_lst[avi->framesize_idx++] = alignlen | AVI_AUDIO_FRAME;
@@ -283,14 +285,16 @@ void avimuxer_audio(void *ctx, unsigned char *buf, int len, int key, unsigned pt
     }
 }
 
-void avimuxer_video(void *ctx, unsigned char *buf, int len, int key, unsigned pts)
+void avimuxer_video(void *ctx, unsigned char *buf1, int len1, unsigned char *buf2, int len2, int key, unsigned pts)
 {
     AVI_FILE *avi = (AVI_FILE*)ctx;
     if (avi && avi->fp) {
+        int len      =  len1 + len2;
         int alignlen = (len & 1) ? len + 1 : len;
-        fwrite("01dc"   , 4  , 1, avi->fp);
-        fwrite(&alignlen, 4  , 1, avi->fp);
-        fwrite( buf     , len, 1, avi->fp);
+        fwrite("01dc"   , 4, 1, avi->fp);
+        fwrite(&alignlen, 4, 1, avi->fp);
+        if (len1) fwrite(buf1, len1, 1, avi->fp);
+        if (len2) fwrite(buf2, len2, 1, avi->fp);
         if (len & 1) fputc(0, avi->fp);
         if (avi->framesize_lst && avi->framesize_idx < avi->framesize_max) {
             avi->framesize_lst[avi->framesize_idx++] = alignlen | AVI_VIDEO_FRAME | (key << 30);
