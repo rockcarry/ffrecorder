@@ -47,13 +47,13 @@ static int h264_parse_sps_pps(uint8_t *data1, int len1, uint8_t *data2, int len2
 
     i = h26x_parse_nalu_header(data1, len1, data2, len2, 0, &hsize);
     if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) & 0x1f) != 7) return -1;
-    sidx = i - hsize; // got sps
+    sidx = i + 1; // got sps
     len -= i;
     i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
     slen = i - sidx - hsize;
 
     if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) & 0x1f) != 8) return -1;
-    pidx = i - hsize;
+    pidx = i + 1;
     len -= i;
     i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
     plen = i - pidx - hsize;
@@ -71,19 +71,19 @@ static int h265_parse_vps_sps_pps(uint8_t *data1, int len1, uint8_t *data2, int 
 
     i = h26x_parse_nalu_header(data1, len1, data2, len2, 0, &hsize);
     if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) >> 1) != 32) return -1;
-    vidx = i - hsize; // got vps
+    vidx = i + 1; // got vps
     len -= i;
     i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
     vlen = i - vidx - hsize;
 
     if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) >> 1) != 33) return -1;
-    sidx = i - hsize; // got sps
+    sidx = i + 1; // got sps
     len -= i;
     i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
     slen = i - sidx - hsize;
 
     if (i < 2 || i + 1 >= len || (getbyte(data1, len1, data2, len2, i + 1) >> 1) != 34) return -1;
-    pidx = i - hsize; // got pps
+    pidx = i + 1; // got pps
     len -= i;
     i = h26x_parse_nalu_header(data1, len1, data2, len2, i, &hsize);
     plen = i - pidx - hsize;
@@ -502,10 +502,6 @@ static void mp4muxer_write_avc1_box(MP4FILE *mp4, uint8_t *spsbuf, int spslen, u
 {
     AVC1BOX avc1box = {0};
     AVCCBOX avccbox = {0};
-    int     i;
-
-    for (i=0; i<spslen-1 && spsbuf[i]==0; i++); spsbuf += i+1; spslen -= i+1;
-    for (i=0; i<ppslen-1 && ppsbuf[i]==0; i++); ppsbuf += i+1; ppslen -= i+1;
 
     avccbox.avcc_size          = sizeof(AVCCBOX) + spslen + spslen;
     avccbox.avcc_type          = MP4_FOURCC('a', 'v', 'c', 'C');
@@ -547,11 +543,6 @@ static void mp4muxer_write_hev1_box(MP4FILE *mp4, uint8_t *vpsbuf, int vpslen, u
 {
     AVC1BOX hev1box = {0};
     HVCCBOX hvccbox = {0};
-    int     i;
-
-    for (i=0; i<vpslen-1 && vpsbuf[i]==0; i++); vpsbuf += i+1; vpslen -= i+1;
-    for (i=0; i<spslen-1 && spsbuf[i]==0; i++); spsbuf += i+1; spslen -= i+1;
-    for (i=0; i<ppslen-1 && ppsbuf[i]==0; i++); ppsbuf += i+1; ppslen -= i+1;
 
     hvccbox.hvcc_size            = sizeof(HVCCBOX) + 3 * 5 + vpslen + spslen + ppslen;
     hvccbox.hvcc_type            = MP4_FOURCC('h', 'v', 'c', 'C');

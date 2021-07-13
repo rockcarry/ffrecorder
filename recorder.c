@@ -41,7 +41,7 @@ typedef struct {
 static void* record_thread_proc(void *argv)
 {
     RECORDER *recorder = (RECORDER*)argv;
-    char      filepath[256] = "";
+    char      filepath[273] = "";
     void    (*muxer_exit )(void*) = (recorder->rectype == RECTYPE_AVI) ? avimuxer_exit : mp4muxer_exit;
     void    (*muxer_video)(void*, unsigned char*, int, unsigned char*, int, int, unsigned) = (recorder->rectype == RECTYPE_AVI) ? avimuxer_video : mp4muxer_video;
     void    (*muxer_audio)(void*, unsigned char*, int, unsigned char*, int, int, unsigned) = (recorder->rectype == RECTYPE_AVI) ? avimuxer_audio : mp4muxer_audio;
