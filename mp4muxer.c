@@ -516,7 +516,7 @@ static void mp4muxer_write_avc1_box(MP4FILE *mp4, uint8_t *spsbuf, int spslen, u
     avccbox.avcc_pps_len       = (uint16_t)(htonl(ppslen) >> 16);
 
     avc1box.avc1_size          = sizeof(AVC1BOX) + avccbox.avcc_size;
-    avc1box.avc1_type          = MP4_FOURCC('h', '2', '6', '4');
+    avc1box.avc1_type          = MP4_FOURCC('a', 'v', 'c', '1');
     avc1box.avc1_data_refidx   = (uint16_t)(htonl(1 ) >> 16);
     avc1box.avc1_width         = (uint16_t)(htonl(mp4->vw) >> 16);
     avc1box.avc1_height        = (uint16_t)(htonl(mp4->vh) >> 16);
@@ -1005,6 +1005,7 @@ void mp4muxer_video(void *ctx, unsigned char *buf1, int len1, unsigned char *buf
     uint8_t  vpsbuf[256]; int vpslen = sizeof(vpsbuf);
     uint8_t  spsbuf[256]; int spslen = sizeof(spsbuf);
     uint8_t  ppsbuf[256]; int ppslen = sizeof(ppsbuf);
+    uint32_t framesize;
     if (!ctx) return;
 
     if (mp4->flags & FLAG_VIDEO_H265_ENCODE) {
@@ -1018,6 +1019,9 @@ void mp4muxer_video(void *ctx, unsigned char *buf1, int len1, unsigned char *buf
             mp4->flags |= FLAG_AVC1_HEV1_WRITTEN;
         }
     }
+
+    framesize = htonl(len);
+    len += sizeof(framesize);
 
     if (mp4->stszv_buf && (int)ntohl(mp4->stszv_count) < mp4->vframemax) {
         mp4->stszv_buf[ntohl(mp4->stszv_count)] = htonl(len);
@@ -1051,6 +1055,7 @@ void mp4muxer_video(void *ctx, unsigned char *buf1, int len1, unsigned char *buf
 
     mp4->mdat_size = htonl(ntohl(mp4->mdat_size) + len);
     mp4->chunk_off+= len;
+    fwrite(&framesize, 1, sizeof(framesize), mp4->fp);
     if (len1) fwrite(buf1, len1, 1, mp4->fp);
     if (len2) fwrite(buf2, len2, 1, mp4->fp);
 
