@@ -9,19 +9,9 @@
 #include "codec.h"
 #include "utils.h"
 
-#define OUT_BUF_SIZE (1024 * 1 * 1)
 typedef struct {
-    CODEC_INTERFACE_FUNCS
+    CODEC_COMMON_MEMBERS
 } ALAWENC;
-
-static void alawenc_uninit(void *ctxt)
-{
-    ALAWENC *enc = (ALAWENC*)ctxt;
-    if (!ctxt) return;
-    pthread_mutex_destroy(&enc->omutex);
-    pthread_cond_destroy (&enc->ocond );
-    free(enc);
-}
 
 static uint8_t pcm2alaw(int16_t pcm)
 {
@@ -34,75 +24,28 @@ static uint8_t pcm2alaw(int16_t pcm)
     return (alaw ^ 0xd5);
 }
 
-static void alawenc_write(void *ctxt, void *buf, int len)
+static int alawenc_writebuf(void *ctxt, uint8_t *buf, int len)
 {
-    uint32_t timestamp, typelen, i;
-    ALAWENC *enc = (ALAWENC*)ctxt;
-    if (!ctxt) return;
-    pthread_mutex_lock(&enc->omutex);
-    typelen = len / sizeof(int16_t);
-    if (sizeof(uint32_t) + sizeof(uint32_t) + typelen <= enc->omaxsize - enc->ocursize) {
-        timestamp = get_tick_count();
-        typelen   = 'A' | (typelen << 8);
-        enc->otail    = ringbuf_write(enc->obuff, enc->omaxsize, enc->otail, (uint8_t*)&timestamp, sizeof(timestamp));
-        enc->otail    = ringbuf_write(enc->obuff, enc->omaxsize, enc->otail, (uint8_t*)&typelen  , sizeof(typelen  ));
-        enc->ocursize+= sizeof(timestamp) + sizeof(typelen);
-        for (i=0; i<len/sizeof(int16_t); i++,enc->ocursize++) {
-            if (enc->otail == enc->omaxsize) enc->otail = 0;
-            enc->obuff[enc->otail++] = pcm2alaw(((int16_t*)buf)[i]);
+    ALAWENC  *enc = (ALAWENC*)ctxt;
+    int   samples = len / sizeof(int16_t), n, i;
+    uint8_t *pdst = enc->buff + enc->tail;
+    int16_t *psrc = (int16_t*)buf;
+    while (samples > 0) {
+        n = MIN(samples, enc->maxsize - enc->tail);
+        for (i=0; i<n; i++) *pdst++ = pcm2alaw(*psrc++);
+        samples -= n; enc->tail += n;
+        if (enc->tail == enc->maxsize) {
+            enc->tail = 0; pdst = enc->buff;
+            codec_writeframe(enc->next, enc->buff, enc->maxsize, CODEC_FOURCC('A', 0, 0, 0), get_tick_count());
         }
-        pthread_cond_signal(&enc->ocond);
-    } else {
-        printf("aenc drop data %d !\n", len);
     }
-    pthread_mutex_unlock(&enc->omutex);
+    return (uint8_t*)psrc - buf;
 }
 
-
-static void alawenc_start(void *ctxt, int start)
+void* alawenc_init(int bufsize, void *next)
 {
-    ALAWENC *enc = (ALAWENC*)ctxt;
-    if (!ctxt) return;
-    if (start) {
-        enc->status |= CODEC_FLAG_START;
-    } else {
-        pthread_mutex_lock(&enc->omutex);
-        enc->status &=~CODEC_FLAG_START;
-        pthread_cond_signal(&enc->ocond);
-        pthread_mutex_unlock(&enc->omutex);
-    }
-}
-
-static void alawenc_reset(void *ctxt, int type)
-{
-    ALAWENC *enc = (ALAWENC*)ctxt;
-    if (!ctxt) return;
-    if (type & (CODEC_CLEAR_INBUF|CODEC_CLEAR_OUTBUF)) {
-        pthread_mutex_lock(&enc->omutex);
-        enc->ohead = enc->otail = enc->ocursize = 0;
-        pthread_mutex_unlock(&enc->omutex);
-    }
-}
-
-CODEC* alawenc_init(int obufsize)
-{
-    ALAWENC *enc = NULL;
-    if (obufsize < OUT_BUF_SIZE) obufsize = OUT_BUF_SIZE;
-    if (!(enc = calloc(1, sizeof(ALAWENC) + obufsize))) return NULL;
-
-    strncpy(enc->name, "alawenc", sizeof(enc->name));
-    enc->uninit     = alawenc_uninit;
-    enc->write      = alawenc_write;
-    enc->read       = codec_read_common;
-    enc->obuflock   = codec_obuflock_common;
-    enc->obufunlock = codec_obufunlock_common;
-    enc->start      = alawenc_start;
-    enc->reset      = alawenc_reset;
-    enc->omaxsize   = obufsize;
-    enc->obuff      = (uint8_t*)enc + sizeof(ALAWENC);
-
-    // init mutex & cond
-    pthread_mutex_init(&enc->omutex, NULL);
-    pthread_cond_init (&enc->ocond , NULL);
-    return (CODEC*)enc;
+    CODEC *codec = codec_init("alawenc", sizeof(ALAWENC), MAX(320, bufsize), next);
+    if (!codec) return NULL;
+    codec->writebuf = alawenc_writebuf;
+    return codec;
 }

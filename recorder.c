@@ -7,6 +7,7 @@
 #include "avimuxer.h"
 #include "mp4muxer.h"
 #include "recorder.h"
+#include "codec.h"
 #include "utils.h"
 
 #ifdef _MSC_VER
@@ -28,8 +29,10 @@ typedef struct {
     uint32_t  rectype;
     uint32_t  starttick;
 
-    CODEC    *aenc;
-    CODEC    *venc;
+    #define MAX_CODEC_NUM 8
+    CODEC    *codeclist[MAX_CODEC_NUM];
+    int       codecnum;
+    uint8_t   aacinfo[256];
 
     #define FLAG_EXIT  (1 << 0)
     #define FLAG_START (1 << 1)
@@ -37,6 +40,11 @@ typedef struct {
     uint32_t  flags;
     pthread_t pthread;
 } RECORDER;
+
+#define IS_AUDIO_KEYFRAME(type) ((char)(type) == 'A')
+#define IS_VIDEO_KEYFRAME(type) ((char)(type) == 'V')
+#define IS_VIDEO_H265_ENC(type) ((((type) >> 8) & 0xFF) == '5')
+#define IS_VIDEO_FRAME(type)    ((char)(type) == 'V' || (char)(type) == 'v')
 
 static void* record_thread_proc(void *argv)
 {
@@ -47,56 +55,51 @@ static void* record_thread_proc(void *argv)
     void    (*muxer_audio)(void*, unsigned char*, int, unsigned char*, int, int, unsigned) = (recorder->rectype == RECTYPE_AVI) ? avimuxer_audio : mp4muxer_audio;
     void     *muxer_ctxt = NULL;
     uint8_t  *buf1, *buf2;
-    int       len1,  len2;
-    int       key, ret;
-    uint32_t  pts;
+    int       len1,  len2, ret, i;
+    uint32_t  type, pts;
 
     while (!(recorder->flags & FLAG_EXIT)) {
         if (!(recorder->flags & FLAG_START)) { recorder->starttick = 0; usleep(100*1000); continue; }
 
-        ret = codec_obuflock(recorder->venc, &buf1, &len1, &buf2, &len2, &key, &pts, 10);
-        if ((recorder->flags & FLAG_START) == 0 || (ret > 0 && (recorder->flags & FLAG_NEXT) && key)) { // if record stop or change to next record file
+        ret = codec_lockframe(recorder->codeclist[0], &buf1, &len1, &buf2, &len2, &type, &pts, 50);
+        if ((recorder->flags & FLAG_START) == 0 || (ret > 0 && (recorder->flags & FLAG_NEXT) && IS_AUDIO_KEYFRAME(type))) { // if record stop or change to next record file
             muxer_exit(muxer_ctxt); muxer_ctxt = NULL;
             recorder->flags &= ~FLAG_NEXT;
         }
         if (ret > 0) { // if recorder started, and got video data
-            if (!muxer_ctxt && key) { // if muxer not created and this is video key frame
-                int ish265 = !!strstr(recorder->venc->name, "h265");
+            if (!muxer_ctxt && IS_VIDEO_KEYFRAME(type)) { // if muxer not created and this is video key frame
                 time_t     now= time(NULL);
                 struct tm *tm = localtime(&now);
                 snprintf(filepath, sizeof(filepath), "%s-%04d%02d%02d-%02d%02d%02d.%s", recorder->filename,
                         tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec,
                         recorder->rectype == RECTYPE_AVI ? "avi" : "mp4");
                 if (recorder->rectype == RECTYPE_AVI) {
-                    muxer_ctxt = avimuxer_init(filepath, recorder->duration, recorder->width, recorder->height, recorder->fps, ret, ish265);
+                    muxer_ctxt = avimuxer_init(filepath, recorder->duration, recorder->width, recorder->height, recorder->fps, recorder->fps * 2, IS_VIDEO_H265_ENC(type), 0);
                 } else {
-                    muxer_ctxt = mp4muxer_init(filepath, recorder->duration, recorder->width, recorder->height, recorder->fps, recorder->fps * 2, recorder->channels, recorder->samprate, 16, 1024, recorder->aenc->aacinfo, ish265);
+                    muxer_ctxt = mp4muxer_init(filepath, recorder->duration, recorder->width, recorder->height, recorder->fps, recorder->fps * 2, IS_VIDEO_H265_ENC(type), recorder->channels, recorder->samprate, 16, 1024, recorder->aacinfo);
                 }
                 if (recorder->starttick == 0 && muxer_ctxt) {
                     recorder->starttick = get_tick_count();
                     recorder->starttick = recorder->starttick ? recorder->starttick : 1;
                 }
             }
-            muxer_video(muxer_ctxt, buf1, len1, buf2, len2, key, pts);
+            (IS_VIDEO_FRAME(type) ? muxer_video : muxer_audio)(muxer_ctxt, buf1, len1, buf2, len2, IS_VIDEO_KEYFRAME(type), pts);
         }
-        if (ret >= 0) codec_obufunlock(recorder->venc, ret);
-
-        ret = codec_obuflock(recorder->aenc, &buf1, &len1, &buf2, &len2, &key, &pts, 10);
-        if (ret >  0) muxer_audio(muxer_ctxt, buf1, len1, buf2, len2, key, pts); // if recorder started and muxer created and got audio frame
-        if (ret >= 0) codec_obufunlock(recorder->aenc, ret);
+        codec_unlockframe(recorder->codeclist[0], ret);
 
         if (recorder->starttick && (int32_t)get_tick_count() - (int32_t)recorder->starttick >= recorder->duration) {
             recorder->starttick += recorder->duration;
             recorder->flags     |= FLAG_NEXT;
-            codec_reset(recorder->venc, CODEC_REQUEST_IDR);
+            for (i=0; i<recorder->codecnum; i++) codec_config(recorder->codeclist[i], CODEC_CONFIG_REQUEST_IDR, NULL, 0);
         }
     }
     muxer_exit(muxer_ctxt);
     return NULL;
 }
 
-void* ffrecorder_init(char *name, char *type, int duration, int channels, int samprate, int width, int height, int fps, CODEC *aenc, CODEC *venc)
+void* ffrecorder_init(char *name, char *type, int duration, int channels, int samprate, int width, int height, int fps, void *codeclist, int codecnum)
 {
+    int       i;
     RECORDER *recorder = calloc(1, sizeof(RECORDER));
     if (!recorder) return NULL;
 
@@ -107,11 +110,16 @@ void* ffrecorder_init(char *name, char *type, int duration, int channels, int sa
     recorder->width    = width;
     recorder->height   = height;
     recorder->fps      = fps;
-    recorder->aenc     = aenc;
-    recorder->venc     = venc;
-
+    recorder->codecnum = MIN(codecnum, MAX_CODEC_NUM);
+    memcpy(recorder->codeclist, codeclist, recorder->codecnum * sizeof(void*));
     if (strcmp(type, "mp4") == 0) recorder->rectype = RECTYPE_MP4;
     if (strcmp(type, "avi") == 0) recorder->rectype = RECTYPE_AVI;
+
+    for (i=0; i<recorder->codecnum; i++) {
+        if (strcmp(recorder->codeclist[i]->name, "aacenc") == 0) {
+            memcpy(recorder->aacinfo, recorder->codeclist[i]->aacinfo, MIN(sizeof(recorder->aacinfo), sizeof(recorder->codeclist[i]->aacinfo)));
+        }
+    }
 
     // create server thread
     pthread_create(&recorder->pthread, NULL, record_thread_proc, recorder);
@@ -122,27 +130,28 @@ void ffrecorder_exit(void *ctxt)
 {
     RECORDER *recorder = (RECORDER*)ctxt;
     if (!ctxt) return;
-    codec_start(recorder->aenc, 0);
-    codec_start(recorder->venc, 0);
-    recorder->flags = (recorder->flags & ~FLAG_START) | FLAG_EXIT;
+    ffrecorder_start(ctxt, 0);
+    recorder->flags |= FLAG_EXIT;
     pthread_join(recorder->pthread, NULL);
     free(recorder);
 }
 
 void ffrecorder_start(void *ctxt, int start)
 {
+    int       i;
     RECORDER *recorder = (RECORDER*)ctxt;
     if (!ctxt) return;
     if (start && !(recorder->flags & FLAG_START)) {
         recorder->flags |= FLAG_START;
-        codec_reset(recorder->aenc, CODEC_CLEAR_INBUF|CODEC_CLEAR_OUTBUF|CODEC_REQUEST_IDR);
-        codec_reset(recorder->venc, CODEC_CLEAR_INBUF|CODEC_CLEAR_OUTBUF|CODEC_REQUEST_IDR);
-        codec_start(recorder->aenc, 1);
-        codec_start(recorder->venc, 1);
+        for (i=0; i<recorder->codecnum; i++) {
+            codec_config(recorder->codeclist[i], CODEC_CONFIG_CLEAR_BUFF|CODEC_CONFIG_REQUEST_IDR, NULL, 0);
+            codec_start (recorder->codeclist[i], 1);
+        }
     } else if (!start && (recorder->flags & FLAG_START)) {
         recorder->flags &=~FLAG_START;
-        codec_start(recorder->aenc, 0);
-        codec_start(recorder->venc, 0);
+        for (i=0; i<recorder->codecnum; i++) {
+            codec_start (recorder->codeclist[i], 0);
+        }
     }
 }
 

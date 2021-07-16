@@ -11,10 +11,7 @@
 #include "utils.h"
 
 typedef struct {
-    CODEC    *alawenc;
-    CODEC    *aacenc ;
-    CODEC    *h264enc;
-    CODEC    *vbufenc;
+    CODEC    *codeclist[4];
     void     *recorder;
     #define FLAG_EXIT (1 << 0)
     uint32_t  flags;
@@ -35,10 +32,8 @@ static void* thread_proc(void *param)
     int16_t   abuf[8000 / 25] = {0};
     uint8_t   vbuf[640 * 480 * 3 / 2] = {0};
     char      str [256];
-//  int       ret, key;
 
     gen_sin_wav(abuf, sizeof(abuf)/sizeof(int16_t)/2, 8000, 300);
-//  codec_start(test->h264enc, 1);
     while (!(test->flags & FLAG_EXIT)) {
         time_t     now= time(NULL);
         struct tm *tm = localtime(&now);
@@ -49,28 +44,23 @@ static void* thread_proc(void *param)
         tick_sleep = (int32_t)tick_next - (int32_t)get_tick_count();
         tick_next += 40;
 
-//      codec_write(test->alawenc, abuf, sizeof(abuf));
-        codec_write(test->aacenc , abuf, sizeof(abuf));
-        codec_write(test->h264enc, vbuf, sizeof(vbuf));
-
-//      ret = codec_read(test->h264enc, vbuf, sizeof(vbuf), NULL, &key, NULL, 0);
-//      if (ret > 0) codec_write(test->vbufenc, vbuf, (ret << 8) | (key ? 'V' : 'v'));
+        codec_writebuf(test->codeclist[2], (uint8_t*)abuf, sizeof(abuf));
+        codec_writebuf(test->codeclist[3], (uint8_t*)vbuf, sizeof(vbuf));
 
         if (tick_sleep > 0) usleep(tick_sleep * 1000);
     }
-//  codec_start(test->h264enc, 0);
     return NULL;
 }
 
 int main(void)
 {
     TESTCTXT test = {0};
-
-    test.alawenc = alawenc_init(1   * 1024);
-    test.aacenc  = aacenc_init (8   * 1024, 1, 8000, 32000);
-    test.h264enc = h264enc_init(256 * 1024, 25, 640, 480, 512000);
-    test.vbufenc = bufenc_init (256 * 1024, "h264buf");
-    test.recorder= ffrecorder_init("test", "mp4", 60000, 1, 8000, 640, 480, 25, test.aacenc, test.h264enc);
+    int      i;
+    test.codeclist[0] = codec_init  ("buffer", sizeof(CODEC), 512 * 1024, NULL);
+    test.codeclist[1] = alawenc_init(0, test.codeclist[0]);
+    test.codeclist[2] = aacenc_init (0, test.codeclist[0], 32000 , 8000, 1);
+    test.codeclist[3] = h264enc_init(0, test.codeclist[0], 512000, 25, 640, 480);
+    test.recorder= ffrecorder_init("test", "mp4", 60000, 1, 8000, 640, 480, 25, test.codeclist, 4);
     pthread_create(&test.thread, NULL, thread_proc, &test);
 
     ffrecorder_start(test.recorder, 1);
@@ -87,10 +77,7 @@ int main(void)
     ffrecorder_start(test.recorder, 0);
 
     pthread_join(test.thread, NULL);
-    if (test.recorder) ffrecorder_exit(test.recorder);
-    if (test.alawenc ) codec_uninit(test.alawenc);
-    if (test.aacenc  ) codec_uninit(test.aacenc );
-    if (test.h264enc ) codec_uninit(test.h264enc);
-    if (test.vbufenc ) codec_uninit(test.vbufenc);
+    ffrecorder_exit(test.recorder);
+    for (i=3; i>=0; i--) codec_free(test.codeclist[i]);
     return 0;
 }

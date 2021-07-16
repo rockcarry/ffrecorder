@@ -10,192 +10,129 @@
 #include "x264.h"
 #include "utils.h"
 
-#define YUV_BUF_NUM    3
-#define OUT_BUF_SIZE  (1 * 1024 * 1024)
+#define CODEC_FLAG_KEY_FRAME_DROPPED (1 << 3)
 
 typedef struct {
-    CODEC_INTERFACE_FUNCS
+    CODEC_COMMON_MEMBERS
 
     x264_param_t param;
-    x264_t  *x264;
-    int      vw;
-    int      vh;
-
-    uint8_t *ibuff[YUV_BUF_NUM];
-    int      ihead;
-    int      itail;
-    int      isize;
-
-    pthread_mutex_t imutex;
-    pthread_cond_t  icond;
-    pthread_t       thread;
+    x264_t      *x264;
+    int          vw, vh;
+    pthread_t    thread;
 } H264ENC;
 
-static void* venc_encode_thread_proc(void *param)
+static void* encode_thread_proc(void *param)
 {
     H264ENC    *enc = (H264ENC*)param;
     x264_nal_t *nals= NULL;
     x264_picture_t pic_in, pic_out;
-    int32_t key, len, num, i;
+    int yuvsize = enc->vw * enc->vh * 3 / 2;
+    int len, key, num, i;
+    uint32_t size, type, pts;
 
     x264_picture_init(&pic_in );
     x264_picture_init(&pic_out);
-    pic_in.img.i_csp   = X264_CSP_I420;
-    pic_in.img.i_plane = 3;
+    pic_in.img.i_csp       = X264_CSP_I420;
+    pic_in.img.i_plane     = 3;
     pic_in.img.i_stride[0] = enc->vw;
     pic_in.img.i_stride[1] = enc->vw / 2;
     pic_in.img.i_stride[2] = enc->vw / 2;
 
-    while (!(enc->status & CODEC_FLAG_EXIT)) {
-        if (!(enc->status & CODEC_FLAG_START)) { usleep(100*1000); continue; }
+    while (!(enc->flags & CODEC_FLAG_EXIT)) {
+        if (!(enc->flags & CODEC_FLAG_START)) { usleep(100*1000); continue; }
 
-        pthread_mutex_lock(&enc->imutex);
-        while (enc->isize <= 0 && !(enc->status & CODEC_FLAG_EXIT)) pthread_cond_wait(&enc->icond, &enc->imutex);
-        if (enc->isize > 0) {
-            pic_in.img.plane[0] = enc->ibuff[enc->ihead];
-            pic_in.img.plane[1] = enc->ibuff[enc->ihead] + enc->vw * enc->vh * 4 / 4;
-            pic_in.img.plane[2] = enc->ibuff[enc->ihead] + enc->vw * enc->vh * 5 / 4;
-            pic_in.i_type       = 0;
-            if (enc->status & CODEC_FLAG_REQUEST_IDR_FRAME) {
-                enc->status  &= ~CODEC_FLAG_REQUEST_IDR_FRAME;
-                pic_in.i_type =  X264_TYPE_IDR;
-            }
+        pthread_mutex_lock(&enc->mutex);
+        while (enc->cursize == 0 && !(enc->flags & CODEC_FLAG_EXIT)) pthread_cond_wait(&enc->cond, &enc->mutex);
+        if (enc->cursize >= yuvsize) {
+            pic_in.img.plane[0] = enc->buff + enc->head;
+            pic_in.img.plane[1] = enc->buff + enc->head + enc->vw * enc->vh * 4 / 4;
+            pic_in.img.plane[2] = enc->buff + enc->head + enc->vw * enc->vh * 5 / 4;
+            pic_in.i_type       =(enc->flags & CODEC_FLAG_REQIDR) ? X264_TYPE_IDR : 0;
+            enc->flags         &=~CODEC_FLAG_REQIDR;
+            enc->head          += yuvsize;
+            enc->cursize       -= yuvsize;
+            if (enc->head == enc->maxsize) enc->head = 0;
+            pts = get_tick_count();
             len = x264_encoder_encode(enc->x264, &nals, &num, &pic_in, &pic_out);
-            if (++enc->ihead == YUV_BUF_NUM) enc->ihead = 0;
-            enc->isize--;
-        } else {
-            len = 0;
-        }
-        pthread_mutex_unlock(&enc->imutex);
-        if (len <= 0) continue;
+        } else len = 0;
+        pthread_mutex_unlock(&enc->mutex);
 
-        pthread_mutex_lock(&enc->omutex);
-        key = (nals[0].i_type == NAL_SPS);
-        if ((enc->status & CODEC_FLAG_KEY_FRAME_DROPPED) && !key) {
-            printf("h264enc last key frame has dropped, and current frame is non-key frame, so drop it !\n");
-        } else {
-            if (sizeof(uint32_t) + sizeof(uint32_t) + len <= enc->omaxsize - enc->ocursize) {
-                uint32_t timestamp = get_tick_count();
-                uint32_t typelen   = (key ? 'V' : 'v') | (len << 8);
-                enc->otail    = ringbuf_write(enc->obuff, enc->omaxsize, enc->otail, (uint8_t*)&timestamp, sizeof(timestamp));
-                enc->otail    = ringbuf_write(enc->obuff, enc->omaxsize, enc->otail, (uint8_t*)&typelen  , sizeof(typelen  ));
-                enc->ocursize+= sizeof(timestamp) + sizeof(typelen);
-                for (i=0; i<num; i++) enc->otail = ringbuf_write(enc->obuff, enc->omaxsize, enc->otail, nals[i].p_payload, nals[i].i_payload);
-                enc->ocursize += len;
-                pthread_cond_signal(&enc->ocond);
-                if (key) enc->status &= ~CODEC_FLAG_KEY_FRAME_DROPPED;
+        if (len) { // get h264 data
+            key = (nals[0].i_type == NAL_SPS);
+            if ((enc->flags & CODEC_FLAG_KEY_FRAME_DROPPED) && !key) {
+                printf("h264enc last key frame has dropped, and current frame is non-key frame, so drop it !\n");
             } else {
-                printf("h264enc %s frame dropped !\n", key ? "key" : "non-key");
-                if (key) enc->status |=  CODEC_FLAG_KEY_FRAME_DROPPED;
+                CODEC *next = (CODEC*)enc->next;
+                pthread_mutex_lock(&next->mutex);
+                if (sizeof(uint32_t) * 3 + len <= next->maxsize - next->cursize) {
+                    size = len; type = CODEC_FOURCC((key ? 'V' : 'v'), 0, 0, 0);
+                    next->tail    = ringbuf_write(next->buff, next->maxsize, next->tail, (uint8_t*)&size, sizeof(uint32_t));
+                    next->tail    = ringbuf_write(next->buff, next->maxsize, next->tail, (uint8_t*)&type, sizeof(uint32_t));
+                    next->tail    = ringbuf_write(next->buff, next->maxsize, next->tail, (uint8_t*)&pts , sizeof(uint32_t));
+                    next->cursize+= sizeof(uint32_t) * 3;
+                    for (i=0; i<num; i++) next->tail = ringbuf_write(next->buff, next->maxsize, next->tail, nals[i].p_payload, nals[i].i_payload);
+                    next->cursize+= len;
+                    pthread_cond_signal(&next->cond);
+                    if (key) enc->flags &= ~CODEC_FLAG_KEY_FRAME_DROPPED;
+                } else {
+                    printf("h264enc %s frame dropped !\n", key ? "key" : "non-key");
+                    if (key) enc->flags |=  CODEC_FLAG_KEY_FRAME_DROPPED;
+                }
+                pthread_mutex_unlock(&next->mutex);
             }
         }
-        pthread_mutex_unlock(&enc->omutex);
     }
     return NULL;
 }
 
-static void h264enc_uninit(void *ctxt)
+static void h264enc_free(void *ctxt)
 {
     H264ENC *enc = (H264ENC*)ctxt;
-    if (!ctxt) return;
-
-    pthread_mutex_lock(&enc->imutex);
-    enc->status |= CODEC_FLAG_EXIT;
-    pthread_cond_signal(&enc->icond);
-    pthread_mutex_unlock(&enc->imutex);
+    pthread_mutex_lock(&enc->mutex);
+    enc->flags |= CODEC_FLAG_EXIT;
+    pthread_cond_signal(&enc->cond);
+    pthread_mutex_unlock(&enc->mutex);
     pthread_join(enc->thread, NULL);
-    pthread_mutex_destroy(&enc->imutex);
-    pthread_cond_destroy (&enc->icond );
-    pthread_mutex_destroy(&enc->omutex);
-    pthread_cond_destroy (&enc->ocond );
+    pthread_mutex_destroy(&enc->mutex);
+    pthread_cond_destroy (&enc->cond );
     if (enc->x264) x264_encoder_close(enc->x264);
     free(enc);
 }
 
-static void h264enc_write(void *ctxt, void *buf, int len)
+static void h264enc_config(void *ctxt, int flags, void *param1, uint32_t param2)
 {
     H264ENC *enc = (H264ENC*)ctxt;
-    if (!ctxt) return;
-    pthread_mutex_lock(&enc->imutex);
-    if (enc->isize < YUV_BUF_NUM) {
-        memcpy(enc->ibuff[enc->itail], buf, MIN(enc->vw * enc->vh * 3 / 2, len));
-        if (++enc->itail == YUV_BUF_NUM) enc->itail = 0;
-        enc->isize++;
+    if (flags & CODEC_CONFIG_CLEAR_BUFF) {
+        pthread_mutex_lock(&enc->mutex);
+        enc->head = enc->tail = enc->cursize = 0;
+        pthread_mutex_unlock(&enc->mutex);
     }
-    pthread_cond_signal(&enc->icond);
-    pthread_mutex_unlock(&enc->imutex);
-}
-
-static void h264enc_start(void *ctxt, int start)
-{
-    H264ENC *enc = (H264ENC*)ctxt;
-    if (!ctxt) return;
-    if (start) {
-        enc->status |= CODEC_FLAG_START;
-    } else {
-        pthread_mutex_lock(&enc->omutex);
-        enc->status &=~CODEC_FLAG_START;
-        pthread_cond_signal(&enc->ocond);
-        pthread_mutex_unlock(&enc->omutex);
+    if (flags & CODEC_CONFIG_REQUEST_IDR) {
+        enc->flags |= CODEC_FLAG_REQIDR;
+    }
+    if (flags & CODEC_CONFIG_SET_BITRATE) {
+        int bitrate = (int)param2, ret;
+        enc->param.rc.i_bitrate         = bitrate / 1000;
+        enc->param.rc.i_rc_method       = X264_RC_ABR;
+        enc->param.rc.f_rate_tolerance  = 2;
+        enc->param.rc.i_vbv_max_bitrate = 2 * bitrate / 1000;
+        enc->param.rc.i_vbv_buffer_size = 2 * bitrate / 1000;
+        ret = x264_encoder_reconfig(enc->x264, &enc->param);
+        printf("x264_encoder_reconfig bitrate: %d, ret: %d\n", (int)param2, ret);
     }
 }
 
-static void h264enc_reset(void *ctxt, int type)
+void* h264enc_init(int bufsize, void *next, int bitrate, int frmrate , int w, int h)
 {
-    H264ENC *enc = (H264ENC*)ctxt;
-    if (!ctxt) return;
-    if (type & CODEC_CLEAR_INBUF) {
-        pthread_mutex_lock(&enc->imutex);
-        enc->ihead = enc->itail = enc->isize = 0;
-        pthread_mutex_unlock(&enc->imutex);
-    }
-    if (type & CODEC_CLEAR_OUTBUF) {
-        pthread_mutex_lock(&enc->omutex);
-        enc->ohead = enc->otail = enc->ocursize = 0;
-        pthread_mutex_unlock(&enc->omutex);
-    }
-    if (type & CODEC_REQUEST_IDR) {
-        enc->status |= CODEC_FLAG_REQUEST_IDR_FRAME;
-    }
-}
-
-static void h264enc_reconfig(void *codec, int bitrate)
-{
-    H264ENC *enc = (H264ENC*)codec;
-    int      ret;
-    enc->param.rc.i_bitrate         = bitrate / 1000;
-    enc->param.rc.i_rc_method       = X264_RC_ABR;
-    enc->param.rc.f_rate_tolerance  = 2;
-    enc->param.rc.i_vbv_max_bitrate = 2 * bitrate / 1000;
-    enc->param.rc.i_vbv_buffer_size = 2 * bitrate / 1000;
-    ret = x264_encoder_reconfig(enc->x264, &enc->param);
-    printf("x264_encoder_reconfig bitrate: %d, ret: %d\n", bitrate, ret);
-}
-
-CODEC* h264enc_init(int obufsize, int frate, int w, int h, int bitrate)
-{
-    x264_nal_t *nals; int n, i;
+    x264_nal_t *nals= NULL;
     H264ENC    *enc = NULL;
-    if (obufsize < OUT_BUF_SIZE) obufsize = OUT_BUF_SIZE;
-    if (!(enc = calloc(1, sizeof(H264ENC) + (w * h * 3 / 2) * YUV_BUF_NUM + obufsize))) return NULL;
+    int         n, i;
 
-    strncpy(enc->name, "h264enc", sizeof(enc->name));
-    enc->uninit     = h264enc_uninit;
-    enc->write      = h264enc_write;
-    enc->read       = codec_read_common;
-    enc->obuflock   = codec_obuflock_common;
-    enc->obufunlock = codec_obufunlock_common;
-    enc->start      = h264enc_start;
-    enc->reset      = h264enc_reset;
-    enc->reconfig   = h264enc_reconfig;
-    enc->omaxsize   = obufsize;
-    enc->obuff      = (uint8_t*)enc + sizeof(H264ENC);
-
-    // init mutex & cond
-    pthread_mutex_init(&enc->imutex, NULL);
-    pthread_cond_init (&enc->icond , NULL);
-    pthread_mutex_init(&enc->omutex, NULL);
-    pthread_cond_init (&enc->ocond , NULL);
+    if (bufsize < w * h * 3 / 2) bufsize = (w * h * 3 / 2) * 2;
+    else bufsize = bufsize - bufsize % (w * h * 3 / 2);
+    if (!(enc = codec_init("h264enc", sizeof(H264ENC), bufsize, next))) return NULL;
+    enc->free   = h264enc_free;
+    enc->config = h264enc_config;
 
     x264_param_default_preset(&enc->param, "ultrafast", "zerolatency");
     x264_param_apply_profile (&enc->param, "baseline");
@@ -205,12 +142,12 @@ CODEC* h264enc_init(int obufsize, int frate, int w, int h, int bitrate)
     enc->param.i_csp            = X264_CSP_I420;
     enc->param.i_width          = w;
     enc->param.i_height         = h;
-    enc->param.i_fps_num        = frate;
+    enc->param.i_fps_num        = frmrate;
     enc->param.i_fps_den        = 1;
 //  enc->param.i_slice_count_max= 1;
 //  enc->param.i_threads        = 1;
-    enc->param.i_keyint_min     = frate * 2;
-    enc->param.i_keyint_max     = frate * 5;
+    enc->param.i_keyint_min     = frmrate * 2;
+    enc->param.i_keyint_max     = frmrate * 5;
     enc->param.rc.i_bitrate     = bitrate / 1000;
 #if 0 // X264_RC_CQP
     enc->param.rc.i_rc_method       = X264_RC_CQP;
@@ -233,9 +170,6 @@ CODEC* h264enc_init(int obufsize, int frate, int w, int h, int bitrate)
     enc->vw   = w;
     enc->vh   = h;
     enc->x264 = x264_encoder_open(&enc->param);
-    for (i=0; i<YUV_BUF_NUM; i++) {
-        enc->ibuff[i] = (uint8_t*)enc + sizeof(H264ENC) + obufsize + i * (w * h * 3 / 2);
-    }
 
     x264_encoder_headers(enc->x264, &nals, &n);
     for (i=0; i<n; i++) {
@@ -251,6 +185,6 @@ CODEC* h264enc_init(int obufsize, int frate, int w, int h, int bitrate)
         }
     }
 
-    pthread_create(&enc->thread, NULL, venc_encode_thread_proc, enc);
-    return (CODEC*)enc;
+    pthread_create(&enc->thread, NULL, encode_thread_proc, enc);
+    return enc;
 }
