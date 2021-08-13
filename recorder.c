@@ -66,7 +66,7 @@ static void* record_thread_proc(void *argv)
             muxer_exit(muxer_ctxt); muxer_ctxt = NULL;
             recorder->flags &= ~FLAG_NEXT;
         }
-        if (ret > 0) { // if recorder started, and got video data
+        if ((recorder->flags & FLAG_START) && ret > 0) { // if recorder started, and got video data
             if (!muxer_ctxt && IS_VIDEO_KEYFRAME(type)) { // if muxer not created and this is video key frame
                 time_t     now= time(NULL);
                 struct tm *tm = localtime(&now);
