@@ -89,7 +89,6 @@ int codec_writeframe(void *c, uint8_t *buf, int len, uint32_t type, uint32_t pts
         codec->tail    = ringbuf_write(codec->buff, codec->maxsize, codec->tail, (uint8_t*) buf , len);
         codec->cursize+= sizeof(uint32_t) * 3 + len;
         pthread_cond_signal(&codec->cond);
-        pthread_mutex_unlock(&codec->mutex);
     }
     pthread_mutex_unlock(&codec->mutex);
     return size;
