@@ -33,7 +33,7 @@ static void* thread_proc(void *param)
     uint8_t   vbuf[640 * 480 * 3 / 2] = {0};
     char      str [256];
 
-    gen_sin_wav(abuf, sizeof(abuf)/sizeof(int16_t)/2, 8000, 300);
+    gen_sin_wav(abuf, sizeof(abuf)/sizeof(int16_t)/2, 8000, 500);
     while (!(test->flags & FLAG_EXIT)) {
         time_t     now= time(NULL);
         struct tm *tm = localtime(&now);
@@ -61,9 +61,9 @@ int main(void)
     test.codeclist[2] = aacenc_init (0, test.codeclist[0], 32000 , 8000, 1);
     test.codeclist[3] = h264enc_init(0, test.codeclist[0], 512000, 25, 640, 480);
     test.recorder= ffrecorder_init("test", "mp4", 60000, 1, 8000, 640, 480, 25, test.codeclist, 4);
-    pthread_create(&test.thread, NULL, thread_proc, &test);
-
     ffrecorder_start(test.recorder, 1);
+
+    pthread_create(&test.thread, NULL, thread_proc, &test);
     while (1) {
         char cmd[256]; scanf("%256s", cmd);
         if (strcmp(cmd, "start") == 0) {
@@ -74,9 +74,9 @@ int main(void)
             test.flags |= FLAG_EXIT; break;
         }
     }
-    ffrecorder_start(test.recorder, 0);
-
     pthread_join(test.thread, NULL);
+
+    ffrecorder_start(test.recorder, 0);
     ffrecorder_exit(test.recorder);
     for (i=3; i>=0; i--) codec_free(test.codeclist[i]);
     return 0;
