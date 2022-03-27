@@ -46,6 +46,7 @@ static void base_codec_config(void *c, int flags, void *param1, uint32_t param2)
 
 void* codec_init(char *name, int codecsize, int buffersize, void *next)
 {
+    pthread_condattr_t attr;
     CODEC *codec = calloc(1, codecsize + buffersize);
     if (!codec) return NULL;
     strncpy(codec->name, name, sizeof(codec->name));
@@ -55,8 +56,10 @@ void* codec_init(char *name, int codecsize, int buffersize, void *next)
     codec->free      = base_codec_free;
     codec->writebuf  = base_codec_writebuf;
     codec->config    = base_codec_config;
-    pthread_mutex_init(&codec->mutex, NULL);
-    pthread_cond_init (&codec->cond , NULL);
+    pthread_condattr_init(&attr);
+    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    pthread_mutex_init(&codec->mutex, NULL );
+    pthread_cond_init (&codec->cond , &attr);
     return codec;
 }
 
@@ -101,7 +104,7 @@ int codec_readframe(void *c, uint8_t *buf, int len, uint32_t *fsize, uint32_t *t
     int      readn = 0, ret;
     uint32_t size;
     if (!codec) return -1;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     ts.tv_nsec += timeout*1000*1000;
     ts.tv_sec  += ts.tv_nsec / 1000000000;
     ts.tv_nsec %= 1000000000;
@@ -129,7 +132,7 @@ int codec_lockframe(void *c, uint8_t **ppbuf1, int *plen1, uint8_t **ppbuf2, int
     struct timespec ts;
     uint32_t size = 0;
     if (!codec) return -1;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     ts.tv_nsec += timeout*1000*1000;
     ts.tv_sec  += ts.tv_nsec / 1000000000;
     ts.tv_nsec %= 1000000000;
@@ -152,6 +155,7 @@ int codec_lockframe(void *c, uint8_t **ppbuf1, int *plen1, uint8_t **ppbuf2, int
         if (plen1 ) *plen1  = len1;
         if (plen2 ) *plen2  = len2;
     }
+    pthread_mutex_unlock(&codec->mutex);
     return size;
 }
 
@@ -159,6 +163,7 @@ void codec_unlockframe(void *c, int len)
 {
     CODEC *codec = (CODEC*)c;
     if (!codec || len == -1) return;
+    pthread_mutex_lock(&codec->mutex);
     if (len > 0) {
         codec->head     = ringbuf_read(codec->buff, codec->maxsize, codec->head, NULL, len);
         codec->cursize -= len;
