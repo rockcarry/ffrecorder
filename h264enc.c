@@ -128,7 +128,7 @@ void* h264enc_init(int bufsize, void *next, int bitrate, int frmrate , int w, in
     H264ENC    *enc = NULL;
     int         n, i;
 
-    if (bufsize < w * h * 3 / 2) bufsize = (w * h * 3 / 2) * 2;
+    if (bufsize < w * h * 3 / 2) bufsize = (w * h * 3 / 2) * 3;
     else bufsize = bufsize - bufsize % (w * h * 3 / 2);
     if (!(enc = codec_init("h264enc", sizeof(H264ENC), bufsize, next))) return NULL;
     enc->free   = h264enc_free;
