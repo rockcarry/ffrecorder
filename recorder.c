@@ -59,10 +59,13 @@ static void* record_thread_proc(void *argv)
     uint32_t  type, pts;
 
     while (!(recorder->flags & FLAG_EXIT)) {
-        if (!(recorder->flags & FLAG_START)) { recorder->starttick = 0; usleep(100*1000); continue; }
+        if (!(recorder->flags & FLAG_START)) {
+            if (muxer_ctxt) { muxer_exit(muxer_ctxt); muxer_ctxt = NULL; }
+            recorder->starttick = 0; usleep(100*1000); continue;
+        }
 
         ret = codec_lockframe(recorder->codeclist[0], &buf1, &len1, &buf2, &len2, &type, &pts, 100);
-        if ((recorder->flags & FLAG_START) == 0 || (ret > 0 && (recorder->flags & FLAG_NEXT) && IS_VIDEO_KEYFRAME(type))) { // if record stop or change to next record file
+        if (ret > 0 && (recorder->flags & FLAG_NEXT) && IS_VIDEO_KEYFRAME(type)) { // if record stop or change to next record file
             muxer_exit(muxer_ctxt); muxer_ctxt = NULL;
             recorder->flags &= ~FLAG_NEXT;
         }
