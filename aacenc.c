@@ -24,7 +24,7 @@ static void* encode_thread_proc(void *param)
 {
     AACENC  *enc = (AACENC*)param;
     uint8_t  buffer[8192];
-    uint32_t size, type, pts;
+    uint32_t size = 0, type = 0, pts = 0;
 
     while (!(enc->flags & CODEC_FLAG_EXIT)) {
         if (!(enc->flags & CODEC_FLAG_START)) { usleep(100*1000); continue; }

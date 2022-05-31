@@ -101,7 +101,7 @@ int codec_readframe(void *c, uint8_t *buf, int len, uint32_t *fsize, uint32_t *t
 {
     CODEC *codec = (CODEC*)c;
     struct timespec ts;
-    int      readn = 0, ret;
+    int      readn = 0, ret = 0;
     uint32_t size;
     if (!codec) return -1;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -128,7 +128,7 @@ int codec_lockframe(void *c, uint8_t **ppbuf1, int *plen1, uint8_t **ppbuf2, int
 {
     CODEC  *codec = (CODEC*)c;
     uint8_t *buf1 = NULL, *buf2 = NULL;
-    int      len1 = 0   ,  len2 = 0, ret;
+    int      len1 = 0   ,  len2 = 0, ret = 0;
     struct timespec ts;
     uint32_t size = 0;
     if (!codec) return -1;
